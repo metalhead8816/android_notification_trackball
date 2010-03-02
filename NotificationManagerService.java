@@ -833,7 +833,10 @@ class NotificationManagerService extends INotificationManager.Stub {
         }
 
         // light
+        Log.d(TAG, "Trackball removing notification: " + r);
+        Log.d(TAG, "Size before: " + mLights.size());
         mLights.remove(r);
+        Log.d(TAG, "Size after: " + mLights.size());
         if (mLights.size() == 0 && mThread != null)
             mThread.mDone = true;
     }
@@ -1166,7 +1169,7 @@ class NotificationManagerService extends INotificationManager.Stub {
 
         public void run() {
             Log.d(TAG, "Trackball, starting new thread");
-            //Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY);
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY);
             int currentIndex = 0;
             NotificationRecord nr;
 
@@ -1189,6 +1192,7 @@ class NotificationManagerService extends INotificationManager.Stub {
                 }
 
                 Log.d(TAG, "Current Notification is: " + nr.toString());
+                Log.d(TAG, "Trackball ledOnMS: " + nr.notification.ledOnMS + " ledOffMS: " + nr.notification.ledOffMS);
                 mHardware.setLightFlashing_UNCHECKED(HardwareService.LIGHT_ID_NOTIFICATIONS,
                         nr.notification.ledARGB, HardwareService.LIGHT_FLASH_TIMED,
                         nr.notification.ledOnMS, nr.notification.ledOffMS);
