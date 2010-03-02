@@ -1,0 +1,11 @@
+Changelog:
+
+v0.1:
+	- Initial commit of version with notification succession
+	- Uses a thread that constantly sleeps to update the colors based on
+	  an ArrayList of NotificationRecords
+
+v0.2:
+	- Updated to not include notifications of the same color multiple
+	  times
+
