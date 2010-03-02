@@ -751,12 +751,18 @@ class NotificationManagerService extends INotificationManager.Stub {
             }
 
             // this option doesn't shut off the lights
-
-            // Log.i(TAG, "notification.lights="
-            // + ((old.notification.lights.flags &
-            // Notification.FLAG_SHOW_LIGHTS) != 0));
             if ((notification.flags & Notification.FLAG_SHOW_LIGHTS) != 0) {
-                mLights.add(r);
+                boolean add = true;
+                for(NotificationRecord nr : mLights){
+                    // found a notification we are already showing.
+                    if(nr.notification.ledARGB == r.notification.ledARGB) {
+                        add = false;
+                        break;
+                    }
+                }
+
+                if (add)
+                    mLights.add(r);
                 updateLightsLocked();
             }
             else {
@@ -990,14 +996,11 @@ class NotificationManagerService extends INotificationManager.Stub {
         }
 
         // handle notification lights
-        Log.d(TAG, "Trackball notification seen HELLO");
+        Log.d(TAG, "Trackball notification seen");
         if (mLights.size() > 0 && mThread == null) {
-            Log.d(TAG, "Trackball creating new thread");
             mThread = new TrackballThread();
             mThread.start();
         }
-
-        Log.d(TAG, "Trackball Point 0 Dude");
 
         if (mLights.size() == 0) {
             if (mThread != null)
@@ -1140,8 +1143,7 @@ class NotificationManagerService extends INotificationManager.Stub {
 
     private class TrackballThread extends Thread {
         public boolean mDone = false;
-        private static final int LIGHTON = 300;
-        private static final int LIGHTOFF = 50;
+        private static final long FLASH_OFFSET = 300;
 
         private void delay(long duration) {
             if (duration > 0) {
@@ -1164,7 +1166,7 @@ class NotificationManagerService extends INotificationManager.Stub {
 
         public void run() {
             Log.d(TAG, "Trackball, starting new thread");
-            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY);
+            //Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY);
             int currentIndex = 0;
             NotificationRecord nr;
 
@@ -1195,7 +1197,7 @@ class NotificationManagerService extends INotificationManager.Stub {
 
                 mHardware.setLightOff_UNCHECKED(HardwareService.LIGHT_ID_NOTIFICATIONS);
                 delay(nr.notification.ledOffMS);
-
+                
                 if (mDone)
                     break;
             }
