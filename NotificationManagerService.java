@@ -13,13 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+ 
 package com.android.server;
-
+ 
 import com.android.server.status.IconData;
 import com.android.server.status.NotificationData;
 import com.android.server.status.StatusBarService;
-
+ 
 import android.app.ActivityManagerNative;
 import android.app.IActivityManager;
 import android.app.INotificationManager;
@@ -59,107 +59,105 @@ import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityManager;
 import android.widget.Toast;
-import android.os.SystemClock;
-
+ 
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
-
-class NotificationManagerService extends INotificationManager.Stub {
+ 
+class NotificationManagerService extends INotificationManager.Stub
+{
     private static final String TAG = "NotificationService";
     private static final boolean DBG = false;
-
+ 
     // message codes
     private static final int MESSAGE_TIMEOUT = 2;
-
+ 
     private static final int LONG_DELAY = 3500; // 3.5 seconds
     private static final int SHORT_DELAY = 2000; // 2 seconds
-
-    private static final long[] DEFAULT_VIBRATE_PATTERN = { 0, 250, 250, 250 };
-
+    
+    private static final long[] DEFAULT_VIBRATE_PATTERN = {0, 250, 250, 250}; 
+ 
     private static final int DEFAULT_STREAM_TYPE = AudioManager.STREAM_NOTIFICATION;
-
+ 
     final Context mContext;
     final IActivityManager mAm;
     final IBinder mForegroundToken = new Binder();
-
+ 
     private WorkerHandler mHandler;
     private StatusBarService mStatusBarService;
     private HardwareService mHardware;
-
+ 
     private NotificationRecord mSoundNotification;
     private AsyncPlayer mSound;
     private boolean mSystemReady;
     private int mDisabledNotifications;
-
+ 
     private NotificationRecord mVibrateNotification;
     private Vibrator mVibrator = new Vibrator();
+ 
+    // for enabling and disabling notification pulse behavior
+    private boolean mScreenOn = true;
+    private boolean mNotificationScreenOn;
+    private boolean mNotificationPulseEnabled;
 
-    // adb
+    private TrackballThread mThread;
+ 
+    // for adb connected notifications
     private boolean mUsbConnected;
     private boolean mAdbEnabled = false;
     private boolean mAdbNotificationShown = false;
     private Notification mAdbNotification;
-
-    private final ArrayList<NotificationRecord> mNotificationList = new ArrayList<NotificationRecord>();
-
+    
+    private final ArrayList<NotificationRecord> mNotificationList =
+            new ArrayList<NotificationRecord>();
+ 
     private ArrayList<ToastRecord> mToastQueue;
-
+ 
     private ArrayList<NotificationRecord> mLights = new ArrayList<NotificationRecord>();
-
+ 
     private boolean mBatteryCharging;
     private boolean mBatteryLow;
     private boolean mBatteryFull;
-
-    // Used to do colors in succession
-    private TrackballThread mThread;
-
-    private static final int BATTERY_LOW_ARGB = 0xFFFF0000; // Charging Low -
-    // red solid on
-    private static final int BATTERY_MEDIUM_ARGB = 0xFFFFFF00; // Charging -
-    // orange solid
-    // on
-    private static final int BATTERY_FULL_ARGB = 0xFF00FF00; // Charging Full -
-    // green solid
-    // on
+ 
+    private static final int BATTERY_LOW_ARGB = 0xFFFF0000; // Charging Low - red solid on
+    private static final int BATTERY_MEDIUM_ARGB = 0xFFFFFF00;    // Charging - orange solid on
+    private static final int BATTERY_FULL_ARGB = 0xFF00FF00; // Charging Full - green solid on
     private static final int BATTERY_BLINK_ON = 125;
     private static final int BATTERY_BLINK_OFF = 2875;
-
+ 
     // Tag IDs for EventLog.
     private static final int EVENT_LOG_ENQUEUE = 2750;
     private static final int EVENT_LOG_CANCEL = 2751;
     private static final int EVENT_LOG_CANCEL_ALL = 2752;
-
+ 
     private static String idDebugString(Context baseContext, String packageName, int id) {
         Context c = null;
-
+ 
         if (packageName != null) {
             try {
                 c = baseContext.createPackageContext(packageName, 0);
-            }
-            catch (NameNotFoundException e) {
+            } catch (NameNotFoundException e) {
                 c = baseContext;
             }
-        }
-        else {
+        } else {
             c = baseContext;
         }
-
+ 
         String pkg;
         String type;
         String name;
-
+ 
         Resources r = c.getResources();
         try {
             return r.getResourceName(id);
-        }
-        catch (Resources.NotFoundException e) {
+        } catch (Resources.NotFoundException e) {
             return "<name unknown>";
         }
     }
-
-    private static final class NotificationRecord {
+ 
+    private static final class NotificationRecord
+    {
         final String pkg;
         final String tag;
         final int id;
@@ -167,18 +165,19 @@ class NotificationManagerService extends INotificationManager.Stub {
         int duration;
         final Notification notification;
         IBinder statusBarKey;
-
-        NotificationRecord(String pkg, String tag, int id, Notification notification) {
+ 
+        NotificationRecord(String pkg, String tag, int id, Notification notification)
+        {
             this.pkg = pkg;
             this.tag = tag;
             this.id = id;
             this.notification = notification;
         }
-
+ 
         void dump(PrintWriter pw, String prefix, Context baseContext) {
             pw.println(prefix + this);
-            pw.println(prefix + "  icon=0x" + Integer.toHexString(notification.icon) + " / "
-                    + idDebugString(baseContext, this.pkg, notification.icon));
+            pw.println(prefix + "  icon=0x" + Integer.toHexString(notification.icon)
+                    + " / " + idDebugString(baseContext, this.pkg, notification.icon));
             pw.println(prefix + "  contentIntent=" + notification.contentIntent);
             pw.println(prefix + "  deleteIntent=" + notification.deleteIntent);
             pw.println(prefix + "  tickerText=" + notification.tickerText);
@@ -188,46 +187,58 @@ class NotificationManagerService extends INotificationManager.Stub {
             pw.println(prefix + "  sound=" + notification.sound);
             pw.println(prefix + "  vibrate=" + Arrays.toString(notification.vibrate));
             pw.println(prefix + "  ledARGB=0x" + Integer.toHexString(notification.ledARGB)
-                    + " ledOnMS=" + notification.ledOnMS + " ledOffMS=" + notification.ledOffMS);
+                    + " ledOnMS=" + notification.ledOnMS
+                    + " ledOffMS=" + notification.ledOffMS);
         }
-
+        
         @Override
-        public final String toString() {
-            return "NotificationRecord{" + Integer.toHexString(System.identityHashCode(this))
-                    + " pkg=" + pkg + " id=" + Integer.toHexString(id) + " tag=" + tag + "}";
+        public final String toString()
+        {
+            return "NotificationRecord{"
+                + Integer.toHexString(System.identityHashCode(this))
+                + " pkg=" + pkg
+                + " id=" + Integer.toHexString(id)
+                + " tag=" + tag + "}";
         }
     }
-
-    private static final class ToastRecord {
+ 
+    private static final class ToastRecord
+    {
         final int pid;
         final String pkg;
         final ITransientNotification callback;
         int duration;
-
-        ToastRecord(int pid, String pkg, ITransientNotification callback, int duration) {
+ 
+        ToastRecord(int pid, String pkg, ITransientNotification callback, int duration)
+        {
             this.pid = pid;
             this.pkg = pkg;
             this.callback = callback;
             this.duration = duration;
         }
-
+ 
         void update(int duration) {
             this.duration = duration;
         }
-
+        
         void dump(PrintWriter pw, String prefix) {
             pw.println(prefix + this);
         }
-
+        
         @Override
-        public final String toString() {
-            return "ToastRecord{" + Integer.toHexString(System.identityHashCode(this)) + " pkg="
-                    + pkg + " callback=" + callback + " duration=" + duration;
+        public final String toString()
+        {
+            return "ToastRecord{"
+                + Integer.toHexString(System.identityHashCode(this))
+                + " pkg=" + pkg
+                + " callback=" + callback
+                + " duration=" + duration;
         }
     }
-
-    private StatusBarService.NotificationCallbacks mNotificationCallbacks = new StatusBarService.NotificationCallbacks() {
-
+ 
+    private StatusBarService.NotificationCallbacks mNotificationCallbacks
+            = new StatusBarService.NotificationCallbacks() {
+ 
         public void onSetDisabled(int status) {
             synchronized (mNotificationList) {
                 mDisabledNotifications = status;
@@ -240,7 +251,7 @@ class NotificationManagerService extends INotificationManager.Stub {
                     finally {
                         Binder.restoreCallingIdentity(identity);
                     }
-
+ 
                     identity = Binder.clearCallingIdentity();
                     try {
                         mVibrator.cancel();
@@ -251,16 +262,16 @@ class NotificationManagerService extends INotificationManager.Stub {
                 }
             }
         }
-
+ 
         public void onClearAll() {
             cancelAll();
         }
-
+ 
         public void onNotificationClick(String pkg, String tag, int id) {
             cancelNotification(pkg, tag, id, Notification.FLAG_AUTO_CANCEL,
                     Notification.FLAG_FOREGROUND_SERVICE);
         }
-
+ 
         public void onPanelRevealed() {
             synchronized (mNotificationList) {
                 // sound
@@ -272,7 +283,7 @@ class NotificationManagerService extends INotificationManager.Stub {
                 finally {
                     Binder.restoreCallingIdentity(identity);
                 }
-
+ 
                 // vibrate
                 mVibrateNotification = null;
                 identity = Binder.clearCallingIdentity();
@@ -282,45 +293,43 @@ class NotificationManagerService extends INotificationManager.Stub {
                 finally {
                     Binder.restoreCallingIdentity(identity);
                 }
-
+ 
                 // light
                 mLights.clear();
-                if (mThread != null)
+                if(mThread != null)
                     mThread.mDone = true;
                 updateLightsLocked();
             }
         }
     };
-
+ 
     private BroadcastReceiver mIntentReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
-
+ 
             if (action.equals(Intent.ACTION_BATTERY_CHANGED)) {
                 boolean batteryCharging = (intent.getIntExtra("plugged", 0) != 0);
                 int level = intent.getIntExtra("level", -1);
                 boolean batteryLow = (level >= 0 && level <= Power.LOW_BATTERY_THRESHOLD);
                 int status = intent.getIntExtra("status", BatteryManager.BATTERY_STATUS_UNKNOWN);
                 boolean batteryFull = (status == BatteryManager.BATTERY_STATUS_FULL || level >= 90);
-
-                if (batteryCharging != mBatteryCharging || batteryLow != mBatteryLow
-                        || batteryFull != mBatteryFull) {
+ 
+                if (batteryCharging != mBatteryCharging ||
+                        batteryLow != mBatteryLow ||
+                        batteryFull != mBatteryFull) {
                     mBatteryCharging = batteryCharging;
                     mBatteryLow = batteryLow;
                     mBatteryFull = batteryFull;
                     updateLights();
                 }
-            }
-            else if (action.equals(Intent.ACTION_UMS_CONNECTED)) {
+            } else if (action.equals(Intent.ACTION_UMS_CONNECTED)) {
                 mUsbConnected = true;
                 updateAdbNotification();
-            }
-            else if (action.equals(Intent.ACTION_UMS_DISCONNECTED)) {
+            } else if (action.equals(Intent.ACTION_UMS_DISCONNECTED)) {
                 mUsbConnected = false;
                 updateAdbNotification();
-            }
-            else if (action.equals(Intent.ACTION_PACKAGE_REMOVED)
+            } else if (action.equals(Intent.ACTION_PACKAGE_REMOVED)
                     || action.equals(Intent.ACTION_PACKAGE_RESTARTED)) {
                 Uri uri = intent.getData();
                 if (uri == null) {
@@ -331,37 +340,62 @@ class NotificationManagerService extends INotificationManager.Stub {
                     return;
                 }
                 cancelAllNotificationsInt(pkgName, 0, 0);
+            } else if (action.equals(Intent.ACTION_SCREEN_ON)) {
+                mScreenOn = true;
+                updateNotificationPulse();
+            } else if (action.equals(Intent.ACTION_SCREEN_OFF)) {
+                mScreenOn = false;
+                updateNotificationPulse();
             }
         }
     };
-
+ 
     class SettingsObserver extends ContentObserver {
         SettingsObserver(Handler handler) {
             super(handler);
         }
-
+        
         void observe() {
             ContentResolver resolver = mContext.getContentResolver();
-            resolver.registerContentObserver(
-                    Settings.Secure.getUriFor(Settings.Secure.ADB_ENABLED), false, this);
+            resolver.registerContentObserver(Settings.Secure.getUriFor(
+                    Settings.Secure.ADB_ENABLED), false, this);
+            resolver.registerContentObserver(Settings.System.getUriFor(
+                    Settings.System.NOTIFICATION_LIGHT_PULSE), false, this);
+            resolver.registerContentObserver(Settings.System.getUriFor(
+                    Settings.System.NOTIFICATION_SCREEN_ON), false, this);
             update();
         }
-
-        @Override
-        public void onChange(boolean selfChange) {
+ 
+        @Override public void onChange(boolean selfChange) {
             update();
         }
-
+ 
         public void update() {
             ContentResolver resolver = mContext.getContentResolver();
-            mAdbEnabled = Settings.Secure.getInt(resolver, Settings.Secure.ADB_ENABLED, 0) != 0;
-            updateAdbNotification();
+            boolean adbEnabled = Settings.Secure.getInt(resolver,
+                        Settings.Secure.ADB_ENABLED, 0) != 0;
+            if (mAdbEnabled != adbEnabled) {
+                mAdbEnabled = adbEnabled;
+                updateAdbNotification();
+            }
+            boolean pulseEnabled = Settings.System.getInt(resolver,
+                        Settings.System.NOTIFICATION_LIGHT_PULSE, 0) != 0;
+            if (mNotificationPulseEnabled != pulseEnabled) {
+                mNotificationPulseEnabled = pulseEnabled;
+                updateNotificationPulse();
+            }
+            boolean screenOn = Settings.System.getInt(resolver,
+                        Settings.System.NOTIFICATION_SCREEN_ON, 0) != 0;
+            if (mNotificationScreenOn != screenOn) {
+                mNotificationScreenOn = screenOn;
+                updateNotificationPulse();
+            }
         }
     }
-
-    private final SettingsObserver mSettingsObserver;
-
-    NotificationManagerService(Context context, StatusBarService statusBar, HardwareService hardware) {
+ 
+    NotificationManagerService(Context context, StatusBarService statusBar,
+            HardwareService hardware)
+    {
         super();
         mContext = context;
         mHardware = hardware;
@@ -372,19 +406,16 @@ class NotificationManagerService extends INotificationManager.Stub {
         mHandler = new WorkerHandler();
         mStatusBarService = statusBar;
         statusBar.setNotificationCallbacks(mNotificationCallbacks);
-
-        // Don't start allowing notifications until the setup wizard has run
-        // once.
-        // After that, including subsequent boots, init with notifications
-        // turned on.
-        // This works on the first boot because the setup wizard will toggle
-        // this
+ 
+        // Don't start allowing notifications until the setup wizard has run once.
+        // After that, including subsequent boots, init with notifications turned on.
+        // This works on the first boot because the setup wizard will toggle this
         // flag at least once and we'll go back to 0 after that.
         if (0 == Settings.Secure.getInt(mContext.getContentResolver(),
-                Settings.Secure.DEVICE_PROVISIONED, 0)) {
+                    Settings.Secure.DEVICE_PROVISIONED, 0)) {
             mDisabledNotifications = StatusBarManager.DISABLE_NOTIFICATION_ALERTS;
         }
-
+ 
         // register for battery changed notifications
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_BATTERY_CHANGED);
@@ -392,27 +423,30 @@ class NotificationManagerService extends INotificationManager.Stub {
         filter.addAction(Intent.ACTION_UMS_DISCONNECTED);
         filter.addAction(Intent.ACTION_PACKAGE_REMOVED);
         filter.addAction(Intent.ACTION_PACKAGE_RESTARTED);
+        filter.addAction(Intent.ACTION_SCREEN_ON);
+        filter.addAction(Intent.ACTION_SCREEN_OFF);
         mContext.registerReceiver(mIntentReceiver, filter);
-
-        mSettingsObserver = new SettingsObserver(mHandler);
-        mSettingsObserver.observe();
+        
+        SettingsObserver observer = new SettingsObserver(mHandler);
+        observer.observe();
     }
-
+ 
     void systemReady() {
         // no beeping until we're basically done booting
         mSystemReady = true;
     }
-
+ 
     // Toasts
     // ============================================================================
-    public void enqueueToast(String pkg, ITransientNotification callback, int duration) {
+    public void enqueueToast(String pkg, ITransientNotification callback, int duration)
+    {
         Log.i(TAG, "enqueueToast pkg=" + pkg + " callback=" + callback + " duration=" + duration);
-
+ 
         if (pkg == null || callback == null) {
             Log.e(TAG, "Not doing toast. pkg=" + pkg + " callback=" + callback);
-            return;
+            return ;
         }
-
+ 
         synchronized (mToastQueue) {
             int callingPid = Binder.getCallingPid();
             long callingId = Binder.clearCallingIdentity();
@@ -424,66 +458,57 @@ class NotificationManagerService extends INotificationManager.Stub {
                 if (index >= 0) {
                     record = mToastQueue.get(index);
                     record.update(duration);
-                }
-                else {
+                } else {
                     record = new ToastRecord(callingPid, pkg, callback, duration);
                     mToastQueue.add(record);
                     index = mToastQueue.size() - 1;
                     keepProcessAliveLocked(callingPid);
                 }
-                // If it's at index 0, it's the current toast. It doesn't matter
-                // if it's
-                // new or just been updated. Call back and tell it to show
-                // itself.
-                // If the callback fails, this will remove it from the list, so
-                // don't
+                // If it's at index 0, it's the current toast.  It doesn't matter if it's
+                // new or just been updated.  Call back and tell it to show itself.
+                // If the callback fails, this will remove it from the list, so don't
                 // assume that it's valid after this.
                 if (index == 0) {
                     showNextToastLocked();
                 }
-            }
-            finally {
+            } finally {
                 Binder.restoreCallingIdentity(callingId);
             }
         }
     }
-
+ 
     public void cancelToast(String pkg, ITransientNotification callback) {
         Log.i(TAG, "cancelToast pkg=" + pkg + " callback=" + callback);
-
+ 
         if (pkg == null || callback == null) {
             Log.e(TAG, "Not cancelling notification. pkg=" + pkg + " callback=" + callback);
-            return;
+            return ;
         }
-
+ 
         synchronized (mToastQueue) {
             long callingId = Binder.clearCallingIdentity();
             try {
                 int index = indexOfToastLocked(pkg, callback);
                 if (index >= 0) {
                     cancelToastLocked(index);
-                }
-                else {
+                } else {
                     Log.w(TAG, "Toast already cancelled. pkg=" + pkg + " callback=" + callback);
                 }
-            }
-            finally {
+            } finally {
                 Binder.restoreCallingIdentity(callingId);
             }
         }
     }
-
+ 
     private void showNextToastLocked() {
         ToastRecord record = mToastQueue.get(0);
         while (record != null) {
-            if (DBG)
-                Log.d(TAG, "Show pkg=" + record.pkg + " callback=" + record.callback);
+            if (DBG) Log.d(TAG, "Show pkg=" + record.pkg + " callback=" + record.callback);
             try {
                 record.callback.show();
                 scheduleTimeoutLocked(record, false);
                 return;
-            }
-            catch (RemoteException e) {
+            } catch (RemoteException e) {
                 Log.w(TAG, "Object died trying to show notification " + record.callback
                         + " in package " + record.pkg);
                 // remove it from the list and let the process die
@@ -494,20 +519,18 @@ class NotificationManagerService extends INotificationManager.Stub {
                 keepProcessAliveLocked(record.pid);
                 if (mToastQueue.size() > 0) {
                     record = mToastQueue.get(0);
-                }
-                else {
+                } else {
                     record = null;
                 }
             }
         }
     }
-
+ 
     private void cancelToastLocked(int index) {
         ToastRecord record = mToastQueue.get(index);
         try {
             record.callback.hide();
-        }
-        catch (RemoteException e) {
+        } catch (RemoteException e) {
             Log.w(TAG, "Object died trying to hide notification " + record.callback
                     + " in package " + record.pkg);
             // don't worry about this, we're about to remove it from
@@ -522,17 +545,18 @@ class NotificationManagerService extends INotificationManager.Stub {
             showNextToastLocked();
         }
     }
-
-    private void scheduleTimeoutLocked(ToastRecord r, boolean immediate) {
+ 
+    private void scheduleTimeoutLocked(ToastRecord r, boolean immediate)
+    {
         Message m = Message.obtain(mHandler, MESSAGE_TIMEOUT, r);
         long delay = immediate ? 0 : (r.duration == Toast.LENGTH_LONG ? LONG_DELAY : SHORT_DELAY);
         mHandler.removeCallbacksAndMessages(r);
         mHandler.sendMessageDelayed(m, delay);
     }
-
-    private void handleTimeout(ToastRecord record) {
-        if (DBG)
-            Log.d(TAG, "Timeout pkg=" + record.pkg + " callback=" + record.callback);
+ 
+    private void handleTimeout(ToastRecord record)
+    {
+        if (DBG) Log.d(TAG, "Timeout pkg=" + record.pkg + " callback=" + record.callback);
         synchronized (mToastQueue) {
             int index = indexOfToastLocked(record.pkg, record.callback);
             if (index >= 0) {
@@ -540,13 +564,14 @@ class NotificationManagerService extends INotificationManager.Stub {
             }
         }
     }
-
+ 
     // lock on mToastQueue
-    private int indexOfToastLocked(String pkg, ITransientNotification callback) {
+    private int indexOfToastLocked(String pkg, ITransientNotification callback)
+    {
         IBinder cbak = callback.asBinder();
         ArrayList<ToastRecord> list = mToastQueue;
         int len = list.size();
-        for (int i = 0; i < len; i++) {
+        for (int i=0; i<len; i++) {
             ToastRecord r = list.get(i);
             if (r.pkg.equals(pkg) && r.callback.asBinder() == cbak) {
                 return i;
@@ -554,13 +579,14 @@ class NotificationManagerService extends INotificationManager.Stub {
         }
         return -1;
     }
-
+ 
     // lock on mToastQueue
-    private void keepProcessAliveLocked(int pid) {
+    private void keepProcessAliveLocked(int pid)
+    {
         int toastCount = 0; // toasts from this pid
         ArrayList<ToastRecord> list = mToastQueue;
         int N = list.size();
-        for (int i = 0; i < N; i++) {
+        for (int i=0; i<N; i++) {
             ToastRecord r = list.get(i);
             if (r.pid == pid) {
                 toastCount++;
@@ -568,93 +594,97 @@ class NotificationManagerService extends INotificationManager.Stub {
         }
         try {
             mAm.setProcessForeground(mForegroundToken, pid, toastCount > 0);
-        }
-        catch (RemoteException e) {
+        } catch (RemoteException e) {
             // Shouldn't happen.
         }
     }
-
-    private final class WorkerHandler extends Handler {
+ 
+    private final class WorkerHandler extends Handler
+    {
         @Override
-        public void handleMessage(Message msg) {
-            switch (msg.what) {
-            case MESSAGE_TIMEOUT:
-                handleTimeout((ToastRecord) msg.obj);
-                break;
+        public void handleMessage(Message msg)
+        {
+            switch (msg.what)
+            {
+                case MESSAGE_TIMEOUT:
+                    handleTimeout((ToastRecord)msg.obj);
+                    break;
             }
         }
     }
-
+ 
+ 
     // Notifications
     // ============================================================================
-    public void enqueueNotification(String pkg, int id, Notification notification, int[] idOut) {
+    public void enqueueNotification(String pkg, int id, Notification notification, int[] idOut)
+    {
         enqueueNotificationWithTag(pkg, null /* tag */, id, notification, idOut);
     }
-
+ 
     public void enqueueNotificationWithTag(String pkg, String tag, int id,
-            Notification notification, int[] idOut) {
+            Notification notification, int[] idOut)
+    {
         checkIncomingCall(pkg);
-
+        
         // This conditional is a dirty hack to limit the logging done on
-        // behalf of the download manager without affecting other apps.
+        //     behalf of the download manager without affecting other apps.
         if (!pkg.equals("com.android.providers.downloads")
                 || Log.isLoggable("DownloadManager", Log.VERBOSE)) {
             EventLog.writeEvent(EVENT_LOG_ENQUEUE, pkg, id, notification.toString());
         }
-
+ 
         if (pkg == null || notification == null) {
-            throw new IllegalArgumentException("null not allowed: pkg=" + pkg + " id=" + id
-                    + " notification=" + notification);
+            throw new IllegalArgumentException("null not allowed: pkg=" + pkg
+                    + " id=" + id + " notification=" + notification);
         }
         if (notification.icon != 0) {
             if (notification.contentView == null) {
-                throw new IllegalArgumentException("contentView required: pkg=" + pkg + " id=" + id
-                        + " notification=" + notification);
+                throw new IllegalArgumentException("contentView required: pkg=" + pkg
+                        + " id=" + id + " notification=" + notification);
             }
             if (notification.contentIntent == null) {
-                throw new IllegalArgumentException("contentIntent required: pkg=" + pkg + " id="
-                        + id + " notification=" + notification);
+                throw new IllegalArgumentException("contentIntent required: pkg=" + pkg
+                        + " id=" + id + " notification=" + notification);
             }
         }
-
+ 
         synchronized (mNotificationList) {
             NotificationRecord r = new NotificationRecord(pkg, tag, id, notification);
             NotificationRecord old = null;
-
+ 
             int index = indexOfNotificationLocked(pkg, tag, id);
             if (index < 0) {
                 mNotificationList.add(r);
-            }
-            else {
+            } else {
                 old = mNotificationList.remove(index);
                 mNotificationList.add(index, r);
                 // Make sure we don't lose the foreground service state.
                 if (old != null) {
-                    notification.flags |= old.notification.flags
-                            & Notification.FLAG_FOREGROUND_SERVICE;
+                    notification.flags |=
+                        old.notification.flags&Notification.FLAG_FOREGROUND_SERVICE;
                 }
             }
-
+            
             // Ensure if this is a foreground service that the proper additional
             // flags are set.
-            if ((notification.flags & Notification.FLAG_FOREGROUND_SERVICE) != 0) {
-                notification.flags |= Notification.FLAG_ONGOING_EVENT | Notification.FLAG_NO_CLEAR;
+            if ((notification.flags&Notification.FLAG_FOREGROUND_SERVICE) != 0) {
+                notification.flags |= Notification.FLAG_ONGOING_EVENT
+                        | Notification.FLAG_NO_CLEAR;
             }
-
+            
             if (notification.icon != 0) {
                 IconData icon = IconData.makeIcon(null, pkg, notification.icon,
-                        notification.iconLevel, notification.number);
+                                                    notification.iconLevel,
+                                                    notification.number);
                 CharSequence truncatedTicker = notification.tickerText;
-
-                // TODO: make this restriction do something smarter like never
-                // fill
-                // more than two screens.
-                // "Why would anyone need more than 80 characters." :-/
+                
+                // TODO: make this restriction do something smarter like never fill
+                // more than two screens.  "Why would anyone need more than 80 characters." :-/
                 final int maxTickerLen = 80;
                 if (truncatedTicker != null && truncatedTicker.length() > maxTickerLen) {
                     truncatedTicker = truncatedTicker.subSequence(0, maxTickerLen);
                 }
-
+ 
                 NotificationData n = new NotificationData();
                 n.pkg = pkg;
                 n.tag = tag;
@@ -677,8 +707,7 @@ class NotificationManagerService extends INotificationManager.Stub {
                     finally {
                         Binder.restoreCallingIdentity(identity);
                     }
-                }
-                else {
+                } else {
                     long identity = Binder.clearCallingIdentity();
                     try {
                         r.statusBarKey = mStatusBarService.addIcon(icon, n);
@@ -688,11 +717,10 @@ class NotificationManagerService extends INotificationManager.Stub {
                         Binder.restoreCallingIdentity(identity);
                     }
                 }
-
+ 
                 sendAccessibilityEvent(notification, pkg);
-
-            }
-            else {
+ 
+            } else {
                 if (old != null && old.statusBarKey != null) {
                     long identity = Binder.clearCallingIdentity();
                     try {
@@ -703,59 +731,73 @@ class NotificationManagerService extends INotificationManager.Stub {
                     }
                 }
             }
-
+ 
             // If we're not supposed to beep, vibrate, etc. then don't.
             if (((mDisabledNotifications & StatusBarManager.DISABLE_NOTIFICATION_ALERTS) == 0)
-                    && (!(old != null && (notification.flags & Notification.FLAG_ONLY_ALERT_ONCE) != 0))
+                    && (!(old != null
+                        && (notification.flags & Notification.FLAG_ONLY_ALERT_ONCE) != 0 ))
                     && mSystemReady) {
+ 
+                final AudioManager audioManager = (AudioManager) mContext
+                .getSystemService(Context.AUDIO_SERVICE);
                 // sound
-                final boolean useDefaultSound = (notification.defaults & Notification.DEFAULT_SOUND) != 0;
+                final boolean useDefaultSound =
+                    (notification.defaults & Notification.DEFAULT_SOUND) != 0; 
                 if (useDefaultSound || notification.sound != null) {
                     Uri uri;
                     if (useDefaultSound) {
                         uri = Settings.System.DEFAULT_NOTIFICATION_URI;
-                    }
-                    else {
+                    } else {
                         uri = notification.sound;
                     }
                     boolean looping = (notification.flags & Notification.FLAG_INSISTENT) != 0;
                     int audioStreamType;
                     if (notification.audioStreamType >= 0) {
                         audioStreamType = notification.audioStreamType;
-                    }
-                    else {
+                    } else {
                         audioStreamType = DEFAULT_STREAM_TYPE;
                     }
                     mSoundNotification = r;
-                    long identity = Binder.clearCallingIdentity();
-                    try {
-                        mSound.play(mContext, uri, looping, audioStreamType);
-                    }
-                    finally {
-                        Binder.restoreCallingIdentity(identity);
+                    // do not play notifications if stream volume is 0
+                    // (typically because ringer mode is silent).
+                    if (audioManager.getStreamVolume(audioStreamType) != 0) {
+                        long identity = Binder.clearCallingIdentity();
+                        try {
+                            mSound.play(mContext, uri, looping, audioStreamType);
+                        }
+                        finally {
+                            Binder.restoreCallingIdentity(identity);
+                        }
                     }
                 }
-
+ 
                 // vibrate
-                final AudioManager audioManager = (AudioManager) mContext
-                        .getSystemService(Context.AUDIO_SERVICE);
-                final boolean useDefaultVibrate = (notification.defaults & Notification.DEFAULT_VIBRATE) != 0;
+                final boolean useDefaultVibrate =
+                    (notification.defaults & Notification.DEFAULT_VIBRATE) != 0; 
                 if ((useDefaultVibrate || notification.vibrate != null)
                         && audioManager.shouldVibrate(AudioManager.VIBRATE_TYPE_NOTIFICATION)) {
                     mVibrateNotification = r;
-
-                    mVibrator.vibrate(useDefaultVibrate ? DEFAULT_VIBRATE_PATTERN
-                            : notification.vibrate,
-                            ((notification.flags & Notification.FLAG_INSISTENT) != 0) ? 0 : -1);
+ 
+                    mVibrator.vibrate(useDefaultVibrate ? DEFAULT_VIBRATE_PATTERN 
+                                                        : notification.vibrate,
+                              ((notification.flags & Notification.FLAG_INSISTENT) != 0) ? 0: -1);
                 }
             }
-
+ 
             // this option doesn't shut off the lights
             if ((notification.flags & Notification.FLAG_SHOW_LIGHTS) != 0) {
                 boolean add = true;
-                for(NotificationRecord nr : mLights){
-                    // found a notification we are already showing.
-                    if(nr.notification.ledARGB == r.notification.ledARGB) {
+                for(int i = 0; i < mLights.size(); i++) {
+                    NotificationRecord nr = mLights.get(i);
+                    
+                    // Found a notification that we are already showing
+                    if (nr.pkg.equals(r.pkg) && nr.id == r.id) {
+                        
+                        // Update the color of the light if it has changed
+                        if (nr.notification.ledARGB != r.notification.ledARGB) {
+                            nr.notification.ledARGB = r.notification.ledARGB;
+                        }
+
                         add = false;
                         break;
                     }
@@ -763,26 +805,27 @@ class NotificationManagerService extends INotificationManager.Stub {
 
                 if (add)
                     mLights.add(r);
+                
                 updateLightsLocked();
-            }
-            else {
-                if (old != null && ((old.notification.flags & Notification.FLAG_SHOW_LIGHTS) != 0)) {
+            } else {
+                if (old != null
+                        && ((old.notification.flags & Notification.FLAG_SHOW_LIGHTS) != 0)) {
                     updateLightsLocked();
                 }
             }
         }
-
+ 
         idOut[0] = id;
     }
-
+ 
     private void sendAccessibilityEvent(Notification notification, CharSequence packageName) {
         AccessibilityManager manager = AccessibilityManager.getInstance(mContext);
         if (!manager.isEnabled()) {
             return;
         }
-
-        AccessibilityEvent event = AccessibilityEvent
-                .obtain(AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED);
+ 
+        AccessibilityEvent event =
+            AccessibilityEvent.obtain(AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED);
         event.setPackageName(packageName);
         event.setClassName(Notification.class.getName());
         event.setParcelableData(notification);
@@ -790,11 +833,10 @@ class NotificationManagerService extends INotificationManager.Stub {
         if (!TextUtils.isEmpty(tickerText)) {
             event.getText().add(tickerText);
         }
-
+ 
         manager.sendAccessibilityEvent(event);
     }
-
-    // Locked on mNotificationList
+ 
     private void cancelNotificationLocked(NotificationRecord r) {
         // status bar
         if (r.notification.icon != 0) {
@@ -807,7 +849,7 @@ class NotificationManagerService extends INotificationManager.Stub {
             }
             r.statusBarKey = null;
         }
-
+ 
         // sound
         if (mSoundNotification == r) {
             mSoundNotification = null;
@@ -819,7 +861,7 @@ class NotificationManagerService extends INotificationManager.Stub {
                 Binder.restoreCallingIdentity(identity);
             }
         }
-
+ 
         // vibrate
         if (mVibrateNotification == r) {
             mVibrateNotification = null;
@@ -831,55 +873,54 @@ class NotificationManagerService extends INotificationManager.Stub {
                 Binder.restoreCallingIdentity(identity);
             }
         }
-
+ 
         // light
-        Log.d(TAG, "Trackball removing notification: " + r);
-        Log.d(TAG, "Size before: " + mLights.size());
+        Log.d(TAG, "Trackball removing notification" + r);
         mLights.remove(r);
-        Log.d(TAG, "Size after: " + mLights.size());
         if (mLights.size() == 0 && mThread != null)
             mThread.mDone = true;
     }
-
+ 
     /**
      * Cancels a notification ONLY if it has all of the {@code mustHaveFlags}
-     * and none of the {@code mustNotHaveFlags}.
+     * and none of the {@code mustNotHaveFlags}. 
      */
     private void cancelNotification(String pkg, String tag, int id, int mustHaveFlags,
             int mustNotHaveFlags) {
         EventLog.writeEvent(EVENT_LOG_CANCEL, pkg, id, mustHaveFlags);
-
+ 
         synchronized (mNotificationList) {
             int index = indexOfNotificationLocked(pkg, tag, id);
             if (index >= 0) {
                 NotificationRecord r = mNotificationList.get(index);
-
+                
                 if ((r.notification.flags & mustHaveFlags) != mustHaveFlags) {
                     return;
                 }
                 if ((r.notification.flags & mustNotHaveFlags) != 0) {
                     return;
                 }
-
+                
                 mNotificationList.remove(index);
-
+ 
                 cancelNotificationLocked(r);
                 updateLightsLocked();
             }
         }
     }
-
+ 
     /**
      * Cancels all notifications from a given package that have all of the
      * {@code mustHaveFlags}.
      */
-    void cancelAllNotificationsInt(String pkg, int mustHaveFlags, int mustNotHaveFlags) {
+    void cancelAllNotificationsInt(String pkg, int mustHaveFlags,
+            int mustNotHaveFlags) {
         EventLog.writeEvent(EVENT_LOG_CANCEL_ALL, pkg, mustHaveFlags);
-
+ 
         synchronized (mNotificationList) {
             final int N = mNotificationList.size();
             boolean canceledSomething = false;
-            for (int i = N - 1; i >= 0; --i) {
+            for (int i = N-1; i >= 0; --i) {
                 NotificationRecord r = mNotificationList.get(i);
                 if ((r.notification.flags & mustHaveFlags) != mustHaveFlags) {
                     continue;
@@ -899,58 +940,59 @@ class NotificationManagerService extends INotificationManager.Stub {
             }
         }
     }
-
+ 
+    
     public void cancelNotification(String pkg, int id) {
         cancelNotificationWithTag(pkg, null /* tag */, id);
     }
-
+ 
     public void cancelNotificationWithTag(String pkg, String tag, int id) {
         checkIncomingCall(pkg);
         // Don't allow client applications to cancel foreground service notis.
-        cancelNotification(pkg, tag, id, 0, Binder.getCallingUid() == Process.SYSTEM_UID ? 0
-                : Notification.FLAG_FOREGROUND_SERVICE);
+        cancelNotification(pkg, tag, id, 0,
+                Binder.getCallingUid() == Process.SYSTEM_UID
+                ? 0 : Notification.FLAG_FOREGROUND_SERVICE);
     }
-
+ 
     public void cancelAllNotifications(String pkg) {
         checkIncomingCall(pkg);
-
+        
         // Calling from user space, don't allow the canceling of actively
         // running foreground services.
         cancelAllNotificationsInt(pkg, 0, Notification.FLAG_FOREGROUND_SERVICE);
     }
-
+ 
     void checkIncomingCall(String pkg) {
         int uid = Binder.getCallingUid();
         if (uid == Process.SYSTEM_UID || uid == 0) {
             return;
         }
         try {
-            ApplicationInfo ai = mContext.getPackageManager().getApplicationInfo(pkg, 0);
+            ApplicationInfo ai = mContext.getPackageManager().getApplicationInfo(
+                    pkg, 0);
             if (ai.uid != uid) {
-                throw new SecurityException("Calling uid " + uid + " gave package" + pkg
-                        + " which is owned by uid " + ai.uid);
+                throw new SecurityException("Calling uid " + uid + " gave package"
+                        + pkg + " which is owned by uid " + ai.uid);
             }
-        }
-        catch (PackageManager.NameNotFoundException e) {
+        } catch (PackageManager.NameNotFoundException e) {
             throw new SecurityException("Unknown package " + pkg);
         }
     }
-
+    
     void cancelAll() {
         synchronized (mNotificationList) {
             final int N = mNotificationList.size();
-            for (int i = N - 1; i >= 0; i--) {
+            for (int i=N-1; i>=0; i--) {
                 NotificationRecord r = mNotificationList.get(i);
-
-                if ((r.notification.flags & (Notification.FLAG_ONGOING_EVENT | Notification.FLAG_NO_CLEAR)) == 0) {
+ 
+                if ((r.notification.flags & (Notification.FLAG_ONGOING_EVENT
+                                | Notification.FLAG_NO_CLEAR)) == 0) {
                     if (r.notification.deleteIntent != null) {
                         try {
                             r.notification.deleteIntent.send();
-                        }
-                        catch (PendingIntent.CanceledException ex) {
-                            // do nothing - there's no relevant way to recover,
-                            // and
-                            // no reason to let this propagate
+                        } catch (PendingIntent.CanceledException ex) {
+                            // do nothing - there's no relevant way to recover, and
+                            //     no reason to let this propagate
                             Log.w(TAG, "canceled PendingIntent for " + r.pkg, ex);
                         }
                     }
@@ -958,72 +1000,66 @@ class NotificationManagerService extends INotificationManager.Stub {
                     cancelNotificationLocked(r);
                 }
             }
-
+ 
             updateLightsLocked();
         }
     }
-
+ 
     private void updateLights() {
         synchronized (mNotificationList) {
             updateLightsLocked();
         }
     }
-
+ 
     // lock on mNotificationList
-    private void updateLightsLocked() {
+    private void updateLightsLocked()
+    {
         // Battery low always shows, other states only show if charging.
         if (mBatteryLow) {
             if (mBatteryCharging) {
                 mHardware.setLightColor_UNCHECKED(HardwareService.LIGHT_ID_BATTERY,
-                        BATTERY_LOW_ARGB);
-            }
-            else {
+                    BATTERY_LOW_ARGB);
+            } else {
                 // Flash when battery is low and not charging
                 mHardware.setLightFlashing_UNCHECKED(HardwareService.LIGHT_ID_BATTERY,
-                        BATTERY_LOW_ARGB, HardwareService.LIGHT_FLASH_TIMED, BATTERY_BLINK_ON,
-                        BATTERY_BLINK_OFF);
+                    BATTERY_LOW_ARGB, HardwareService.LIGHT_FLASH_TIMED,
+                    BATTERY_BLINK_ON, BATTERY_BLINK_OFF);
             }
-        }
-        else if (mBatteryCharging) {
+        } else if (mBatteryCharging) {
             if (mBatteryFull) {
                 mHardware.setLightColor_UNCHECKED(HardwareService.LIGHT_ID_BATTERY,
                         BATTERY_FULL_ARGB);
-            }
-            else {
+            } else {
                 mHardware.setLightColor_UNCHECKED(HardwareService.LIGHT_ID_BATTERY,
                         BATTERY_MEDIUM_ARGB);
             }
-        }
-        else {
+        } else {
             mHardware.setLightOff_UNCHECKED(HardwareService.LIGHT_ID_BATTERY);
         }
-
-        // handle notification lights
+ 
+        // we only flash if screen is off and persistent pulsing is enabled
         Log.d(TAG, "Trackball notification seen");
-        if (mLights.size() > 0 && mThread == null) {
+        if ((mScreenOn && !mNotificationScreenOn) || !mNotificationPulseEnabled) {
+            if (mThread != null)
+                mThread.mDone = true;
+        } else if (mLights.size() > 0 && mThread == null) {
             mThread = new TrackballThread();
             mThread.start();
         }
-
-        if (mLights.size() == 0) {
-            if (mThread != null)
-                mThread.mDone = true;
-        }
-
     }
-
+ 
     // lock on mNotificationList
-    private int indexOfNotificationLocked(String pkg, String tag, int id) {
+    private int indexOfNotificationLocked(String pkg, String tag, int id)
+    {
         ArrayList<NotificationRecord> list = mNotificationList;
         final int len = list.size();
-        for (int i = 0; i < len; i++) {
+        for (int i=0; i<len; i++) {
             NotificationRecord r = list.get(i);
             if (tag == null) {
                 if (r.tag != null) {
                     continue;
                 }
-            }
-            else {
+            } else {
                 if (!tag.equals(r.tag)) {
                     continue;
                 }
@@ -1034,7 +1070,7 @@ class NotificationManagerService extends INotificationManager.Stub {
         }
         return -1;
     }
-
+ 
     // This is here instead of StatusBarPolicy because it is an important
     // security feature that we don't want people customizing the platform
     // to accidentally lose.
@@ -1048,11 +1084,11 @@ class NotificationManagerService extends INotificationManager.Stub {
                         .getSystemService(Context.NOTIFICATION_SERVICE);
                 if (notificationManager != null) {
                     Resources r = mContext.getResources();
-                    CharSequence title = r
-                            .getText(com.android.internal.R.string.adb_active_notification_title);
-                    CharSequence message = r
-                            .getText(com.android.internal.R.string.adb_active_notification_message);
-
+                    CharSequence title = r.getText(
+                            com.android.internal.R.string.adb_active_notification_title);
+                    CharSequence message = r.getText(
+                            com.android.internal.R.string.adb_active_notification_message);
+ 
                     if (mAdbNotification == null) {
                         mAdbNotification = new Notification();
                         mAdbNotification.icon = com.android.internal.R.drawable.stat_sys_warning;
@@ -1060,82 +1096,91 @@ class NotificationManagerService extends INotificationManager.Stub {
                         mAdbNotification.tickerText = title;
                         mAdbNotification.defaults |= Notification.DEFAULT_SOUND;
                     }
-
-                    Intent intent = new Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS);
-                    intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                            | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+ 
+                    Intent intent = new Intent(
+                            Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS);
+                    intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK |
+                            Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
                     // Note: we are hard-coding the component because this is
                     // an important security UI that we don't want anyone
                     // intercepting.
                     intent.setComponent(new ComponentName("com.android.settings",
                             "com.android.settings.DevelopmentSettings"));
-                    PendingIntent pi = PendingIntent.getActivity(mContext, 0, intent, 0);
-
+                    PendingIntent pi = PendingIntent.getActivity(mContext, 0,
+                            intent, 0);
+ 
                     mAdbNotification.setLatestEventInfo(mContext, title, message, pi);
-
+                    
                     mAdbNotificationShown = true;
                     notificationManager.notify(
                             com.android.internal.R.string.adb_active_notification_title,
                             mAdbNotification);
                 }
             }
-
-        }
-        else if (mAdbNotificationShown) {
+            
+        } else if (mAdbNotificationShown) {
             NotificationManager notificationManager = (NotificationManager) mContext
                     .getSystemService(Context.NOTIFICATION_SERVICE);
             if (notificationManager != null) {
                 mAdbNotificationShown = false;
-                notificationManager
-                        .cancel(com.android.internal.R.string.adb_active_notification_title);
+                notificationManager.cancel(
+                        com.android.internal.R.string.adb_active_notification_title);
             }
         }
     }
-
+ 
+    private void updateNotificationPulse() {
+        synchronized (mNotificationList) {
+            updateLightsLocked();
+        }
+    }
+ 
     // ======================================================================
     @Override
     protected void dump(FileDescriptor fd, PrintWriter pw, String[] args) {
-        if (mContext.checkCallingOrSelfPermission(android.Manifest.permission.DUMP) != PackageManager.PERMISSION_GRANTED) {
+        if (mContext.checkCallingOrSelfPermission(android.Manifest.permission.DUMP)
+                != PackageManager.PERMISSION_GRANTED) {
             pw.println("Permission Denial: can't dump NotificationManager from from pid="
-                    + Binder.getCallingPid() + ", uid=" + Binder.getCallingUid());
+                    + Binder.getCallingPid()
+                    + ", uid=" + Binder.getCallingUid());
             return;
         }
-
+        
         pw.println("Current Notification Manager state:");
-
+ 
         int N;
-
+ 
         synchronized (mToastQueue) {
             N = mToastQueue.size();
             if (N > 0) {
                 pw.println("  Toast Queue:");
-                for (int i = 0; i < N; i++) {
+                for (int i=0; i<N; i++) {
                     mToastQueue.get(i).dump(pw, "    ");
                 }
                 pw.println("  ");
             }
-
+            
         }
-
+ 
         synchronized (mNotificationList) {
             N = mNotificationList.size();
             if (N > 0) {
                 pw.println("  Notification List:");
-                for (int i = 0; i < N; i++) {
+                for (int i=0; i<N; i++) {
                     mNotificationList.get(i).dump(pw, "    ", mContext);
                 }
                 pw.println("  ");
             }
-
+            
             N = mLights.size();
             if (N > 0) {
                 pw.println("  Lights List:");
-                for (int i = 0; i < N; i++) {
+                for (int i=0; i<N; i++) {
                     mLights.get(i).dump(pw, "    ", mContext);
                 }
+                pw.println("  ");
             }
-            pw.println("  ");
-
+            
             pw.println("  mSoundNotification=" + mSoundNotification);
             pw.println("  mSound=" + mSound);
             pw.println("  mVibrateNotification=" + mVibrateNotification);
@@ -1150,6 +1195,11 @@ class NotificationManagerService extends INotificationManager.Stub {
 
         private void delay(long duration) {
             if (duration > 0) {
+                try{
+                    sleep(duration);
+                }
+                catch (InterruptedException e) {}
+                /*
                 long bedtime = SystemClock.uptimeMillis();
                 while (duration > 0) {
                     try {
@@ -1164,12 +1214,13 @@ class NotificationManagerService extends INotificationManager.Stub {
                     duration -= (newTime - bedtime);
                     bedtime = newTime;
                 }
+                */
             }
         }
 
         public void run() {
             Log.d(TAG, "Trackball, starting new thread");
-            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY);
+            Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO);
             int currentIndex = 0;
             NotificationRecord nr;
 
@@ -1184,10 +1235,8 @@ class NotificationManagerService extends INotificationManager.Stub {
                     if (currentIndex >= mLights.size())
                         currentIndex = 0;
 
-                    Log.d(TAG, "Trackball: " + SystemClock.uptimeMillis());
                     Log.d(TAG, "CurrentIndex: " + currentIndex + " size: " + mLights.size());
 
-                    Log.d(TAG, "Trackball, trying to set the lights Dude");
                     nr = mLights.get(currentIndex);
                 }
 
@@ -1212,4 +1261,5 @@ class NotificationManagerService extends INotificationManager.Stub {
             Log.d(TAG, "Killing Trackball Thread");
         }
     };
+
 }
