@@ -49,6 +49,8 @@ import android.os.IBinder;
 import android.os.Message;
 import android.os.Power;
 import android.os.Process;
+import android.os.PowerManager;
+import android.os.PowerManager.WakeLock;
 import android.os.RemoteException;
 import android.os.SystemProperties;
 import android.os.Vibrator;
@@ -102,6 +104,7 @@ class NotificationManagerService extends INotificationManager.Stub
     private boolean mNotificationPulseEnabled;
 
     private TrackballThread mThread;
+    private WakeLock mWakeLock;
  
     // for adb connected notifications
     private boolean mUsbConnected;
@@ -406,6 +409,11 @@ class NotificationManagerService extends INotificationManager.Stub
         mHandler = new WorkerHandler();
         mStatusBarService = statusBar;
         statusBar.setNotificationCallbacks(mNotificationCallbacks);
+
+        // Use partial wake lock to stay awake
+        PowerManager pm = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+        mWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, TAG);
+        mWakeLock.setReferenceCounted(true);
  
         // Don't start allowing notifications until the setup wizard has run once.
         // After that, including subsequent boots, init with notifications turned on.
@@ -1198,37 +1206,22 @@ class NotificationManagerService extends INotificationManager.Stub
                 try{
                     sleep(duration);
                 }
-                catch (InterruptedException e) {}
-                /*
-                long bedtime = SystemClock.uptimeMillis();
-                while (duration > 0) {
-                    try {
-                        sleep(duration);
-                    }
-                    catch (InterruptedException e) {
-                    }
-                    if (mDone) {
-                        break;
-                    }
-                    long newTime = SystemClock.uptimeMillis();
-                    duration -= (newTime - bedtime);
-                    bedtime = newTime;
-                }
-                */
+                catch (InterruptedException e) {} 
             }
         }
 
         public void run() {
             Log.d(TAG, "Trackball, starting new thread");
-            Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO);
+            Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY);
             int currentIndex = 0;
             NotificationRecord nr;
 
-            while (!mDone) {
-                synchronized (mNotificationList) {
-                    nr = null;
+            mWakeLock.acquire();
 
-                    if (mLights.size() == 0 || mDone)
+            while (true) {
+                synchronized (mNotificationList) {
+
+                    if (mDone || mLights.size() == 0)
                         break;
 
                     ++currentIndex;
@@ -1250,14 +1243,12 @@ class NotificationManagerService extends INotificationManager.Stub
 
                 mHardware.setLightOff_UNCHECKED(HardwareService.LIGHT_ID_NOTIFICATIONS);
                 delay(nr.notification.ledOffMS);
-                
-                if (mDone)
-                    break;
             }
 
+            mWakeLock.release();
+            
             // Kill the thread since these notifications have been finished.
             mThread = null;
-            mHardware.setLightOff_UNCHECKED(HardwareService.LIGHT_ID_NOTIFICATIONS);
             Log.d(TAG, "Killing Trackball Thread");
         }
     };

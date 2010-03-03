@@ -9,3 +9,16 @@ v0.2:
 	- Updated to not include notifications of the same color multiple
 	  times
 
+v0.3:
+	- Hopefully a fix for the issue of the notifications not staying awake.
+	- More debugging output so people can get me some logs. 
+
+v0.4:
+	- Fixed to use the eclair branch code instead of donut
+	- Options for flashing while screen on, at all work now (eclair options)
+	- Fixed the sleeping issue. Should now work with the screen off.
+
+TODOs:
+	- Optimize battery for the case where there is only one notification
+	  as there is no need to switch back and forth.
+
