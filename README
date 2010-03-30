@@ -18,7 +18,5 @@ v0.4:
 	- Options for flashing while screen on, at all work now (eclair options)
 	- Fixed the sleeping issue. Should now work with the screen off.
 
-TODOs:
-	- Optimize battery for the case where there is only one notification
-	  as there is no need to switch back and forth.
-
+v0.5:
+        - Update to include new breathing light code.
